@@ -8,7 +8,9 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS tasks(
    id INTEGER PRIMARY KEY AUTOINCREMENT,
    name TEXT NOT NULL,
-   done INTEGER NOT NULL DEFAULT 0
+   done INTEGER NOT NULL DEFAULT 0,
+   priority TEXT NOT NULL DEFAULT 'MEDIUM',
+   due_date TEXT
    )
 """)
 

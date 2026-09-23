@@ -1,7 +1,7 @@
 import sqlite3
-from  fastapi import FastAPI
+from  fastapi import FastAPI 
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 from fastapi import FastAPI ,HTTPException
 
 app=FastAPI()
@@ -16,8 +16,10 @@ def read_root():
     return {"message":"我的FastAPI后端启动成功！"}
 
 class TaskCreate(BaseModel):
-    name:str
+    name:str = Field(min_length=1, description="任务名称不能为空")
     done: bool=False
+    priority : str ="medium"
+    due_date: str | None =None
 
 class TaskUpdate(BaseModel):
     done:bool    
@@ -31,7 +33,7 @@ def get_tasks():
     connection =  sqlite3.connect("tasks.db")
     cursor = connection.cursor()
 
-    cursor.execute("SELECT id,name,done FROM tasks")
+    cursor.execute("SELECT id,name,done,priority, due_date FROM tasks")
     rows =cursor.fetchall()
 
     connection.close()
@@ -42,18 +44,20 @@ def get_tasks():
         db_tasks.append({
             "id": row[0],
             "name": row[1],
-            "done": bool(row[2])
+            "done": bool(row[2]),
+            "priority": row[3],
+            "due_date": row[4]
         })
 
     return db_tasks
-@app.post("/tasks")
+@app.post("/tasks",status_code=201)
 def create_task(task:TaskCreate):
     connection =  sqlite3.connect("tasks.db")
     cursor = connection.cursor()
 
     cursor.execute(
-        "INSERT INTO tasks (name ,done) VALUES (?,?)",
-        (task.name, int(task.done))
+        "INSERT INTO tasks (name ,done,priority,due_date) VALUES (?,?,?,?)",
+        (task.name, int(task.done),task.priority, task.due_date)
     )
 
     connection.commit()
@@ -66,7 +70,8 @@ def create_task(task:TaskCreate):
         "id": task_id,
         "name": task.name,
         "done": task.done,
-
+        "priority": task.priority,
+        "due_date": task.due_date
     }
 
 
