@@ -50,6 +50,7 @@ def health_check():
 def get_tasks(
     priority: Literal["low", "medium", "high"] | None = None,
     done: bool | None = None,
+    due_date: str | None = None,
     sort_by: Literal["id", "due_date", "priority"] = "id",
     sort_order: Literal["asc", "desc"] = "desc",
     page: int = 1,
@@ -76,6 +77,10 @@ def get_tasks(
                 conditions.append("done = %s")
                 params.append(done)
 
+            if due_date is not None:
+                conditions.append("due_date = %s")
+                params.append(due_date)
+                
             where_sql = ""
 
             if conditions:
