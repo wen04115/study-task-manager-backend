@@ -47,25 +47,68 @@ def health_check():
 
 
 @app.get("/tasks")
-def get_tasks():
+def get_tasks(
+    priority: Literal["low", "medium", "high"] | None = None,
+    done: bool | None = None,
+    sort_by: Literal["id", "due_date", "priority"] = "id",
+    sort_order: Literal["asc", "desc"] = "desc",
+    page: int = 1,
+    size: int = 2,
+):
+    if page < 1:
+        raise HTTPException(status_code=400, detail="页码必须大于 0")
+
+    if size < 1 or size > 100:
+        raise HTTPException(status_code=400, detail="每页数量必须在 1 到 100 之间")
+
     connection = get_db_connection()
 
     try:
         with connection.cursor() as cursor:
-            cursor.execute("""
-                SELECT id, name, done, priority, due_date
-                FROM tasks
-                ORDER BY id
-            """)
+            conditions = []
+            params = []
+
+            if priority is not None:
+                conditions.append("priority = %s")
+                params.append(priority)
+
+            if done is not None:
+                conditions.append("done = %s")
+                params.append(done)
+
+            where_sql = ""
+
+            if conditions:
+                where_sql = " WHERE " + " AND ".join(conditions)
+
+            # 先查总共有多少条，供前端计算页数
+            count_sql = "SELECT COUNT(*) AS total FROM tasks" + where_sql
+            cursor.execute(count_sql, params)
+            total = cursor.fetchone()["total"]
+
+            # 再查询当前页的数据
+            offset = (page - 1) * size
+
+            sql = "SELECT id, name, done, priority, due_date FROM tasks"
+            sql += where_sql
+            sql += f" ORDER BY {sort_by} {sort_order.upper()}"
+            sql += " LIMIT %s OFFSET %s"
+
+            cursor.execute(sql, [*params, size, offset])
             tasks = cursor.fetchall()
 
-        for task in tasks:
-            task["done"] = bool(task["done"])
+            for task in tasks:
+                task["done"] = bool(task["done"])
 
-        return tasks
+            return {
+                "items": tasks,
+                "total": total,
+                "page": page,
+                "size": size,
+                "total_pages": (total + size - 1) // size,
+            }
     finally:
         connection.close()
-
 
 @app.post("/tasks", status_code=201)
 def create_task(task: TaskCreate):
