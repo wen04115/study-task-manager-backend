@@ -1,10 +1,12 @@
 # 学习任务管理后端
 
-这是一个用 FastAPI 写的学习任务管理后端。
+基于 FastAPI 和 MySQL 的学习任务管理系统后端，为前端提供任务创建、查询、修改、删除及筛选分页接口。
 
-前端可以新增、查看、修改和删除任务。任务数据保存在 MySQL 中。
+## 关联仓库
 
-## 用到的技术
+前端：[study-task-manager-frontend](https://github.com/wen04115/study-task-manager-frontend)
+
+## 技术栈
 
 - Python
 - FastAPI
@@ -12,25 +14,22 @@
 - PyMySQL
 - python-dotenv
 
-## 已实现功能
+## 核心功能
 
-- 新增任务
-- 查看任务列表
-- 修改任务状态、优先级和截止日期
-- 删除任务
-- 按完成状态筛选
-- 按优先级筛选
-- 按截止日期筛选
+- 任务新增、查询、修改、删除
+- 修改任务完成状态、优先级和截止日期
+- 按完成状态、优先级、截止日期筛选任务
 - 按截止日期或编号排序
 - 分页查询任务
-- 使用 `.env` 保存数据库密码
+- 使用 `.env` 管理 MySQL 连接配置
+- 使用参数化 SQL 执行数据库查询
 
 ## 项目文件
 
 ```text
-main.py             FastAPI 接口
+main.py             FastAPI 接口与业务逻辑
 database.py         MySQL 连接代码
-test_mysql.py       测试数据库连接
+test_mysql.py       MySQL 连接测试
 .env.example        数据库配置示例
 
 
