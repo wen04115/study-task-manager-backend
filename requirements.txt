@@ -4,3 +4,4 @@ pydantic==2.14.0
 PyMySQL==1.2.3
 python-dotenv==1.2.2
 SQLAlchemy==2.0.52
+requests

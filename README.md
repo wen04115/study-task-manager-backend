@@ -66,3 +66,15 @@ http://127.0.0.1:8000/docs
 http://127.0.0.1:8000/tasks?priority=high&done=false&page=1&size=2
 这条请求的意思是：查询高优先级、未完成的任务，每页显示 2 条。
 
+## 接口测试
+
+先启动后端，再在项目根目录执行：
+
+```powershell
+$env:NO_PROXY = "127.0.0.1,localhost"
+python -m unittest discover -s tests -v
+```
+
+测试使用 unittest 和 requests，覆盖任务查询、分页校验、条件筛选、空名称校验，以及新增、修改和删除流程。
+
+测试会创建专用任务，并在清理步骤中删除。
