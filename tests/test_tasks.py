@@ -46,24 +46,66 @@ class TaskTests(unittest.TestCase):
                     response.text,
                 ) 
 
-    def test_filter_tasks(self):  #检查返回的任务是否都是高优先级且未完成
+        
+    def delete_test_task(self, task_id): # 清理本次测试创建的任务，不会被当作独立测试
+        response = requests.delete(
+            f"http://127.0.0.1:8000/tasks/{task_id}",
+            timeout=10,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+    
+    def test_filter_tasks(self):  # 创建不同条件的任务，检查筛选是否正确
+        url = "http://127.0.0.1:8000/tasks"
+        task_ids = []
+
+        # 第一条应被查到，后两条不应被查到
+        conditions = [
+            ("high", False),
+            ("high", True),
+            ("low", False),
+        ]
+
+        for priority, done in conditions:
+            created = requests.post(
+                url,
+                json={
+                    "name": f"筛选测试_{uuid4().hex}",
+                    "priority": priority,
+                    "done": done,
+                },
+                timeout=10,
+            )
+            self.assertEqual(created.status_code, 201, created.text)
+
+            task_id = created.json()["id"]
+            self.addCleanup(self.delete_test_task, task_id)
+            task_ids.append(task_id)
+
         response = requests.get(
-            "http://127.0.0.1:8000/tasks",
+            url,
             params={
                 "priority": "high",
                 "done": "false",
+                "sort_by": "id",
+                "sort_order": "desc",
                 "page": 1,
                 "size": 100,
             },
             timeout=10,
         )
-
         self.assertEqual(response.status_code, 200, response.text)
 
-        for task in response.json()["items"]:
-            with self.subTest(task_id=task["id"]):
-                self.assertEqual(task["priority"], "high")
-                self.assertIs(task["done"], False)
+        tasks = response.json()["items"]
+        returned_ids = [task["id"] for task in tasks]
+
+        self.assertIn(task_ids[0], returned_ids)
+        self.assertNotIn(task_ids[1], returned_ids)
+        self.assertNotIn(task_ids[2], returned_ids)
+
+        for task in tasks:
+            self.assertEqual(task["priority"], "high")
+            self.assertIs(task["done"], False)
 
     def test_reject_empty_name(self):  #检查新增任务名称为空时是否返回 422
         response = requests.post(
