@@ -1,3 +1,6 @@
+import os
+import jwt
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -9,10 +12,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from database_orm import get_db
-from models import Task
+from models import Task, User
+from security import hash_password, verify_password, create_access_token
 
 from datetime import date
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 app = FastAPI()
 
@@ -24,6 +28,8 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -44,7 +50,58 @@ class TaskUpdate(BaseModel):
     priority: Literal["low", "medium", "high"] | None = None
     due_date: date | None = None
 
+class UserCreate(BaseModel):
+    username: str = Field(
+        min_length=3,
+        max_length=50,
+        pattern=r"^[a-zA-Z0-9_]+$",
+    )
+    password: str = Field(min_length=8, max_length=128)
 
+class UserLogin(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+    password: str = Field(min_length=1, max_length=128)
+
+# 从请求头中读取 Bearer 登录凭证
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    unauthorized = HTTPException(
+        status_code=401,
+        detail="未登录或登录凭证已失效",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # 没有携带凭证
+    if credentials is None:
+        raise unauthorized
+
+    secret_key = os.getenv("JWT_SECRET_KEY")
+    if not secret_key:
+        raise RuntimeError("请在 .env 中配置 JWT_SECRET_KEY")
+
+    try:
+        # 验证签名、过期时间，并要求包含用户 ID
+        payload = jwt.decode(
+            credentials.credentials,
+            secret_key,
+            algorithms=["HS256"],
+            options={"require": ["exp", "sub"]},
+        )
+        user_id = int(payload["sub"])
+    except (jwt.InvalidTokenError, ValueError, TypeError) as exc:
+        raise unauthorized from exc
+
+    # 凭证对应的用户必须仍存在
+    user = db.get(User, user_id)
+    if user is None:
+        raise unauthorized
+
+    return user    
 @app.get("/")
 def read_root():
     return {"message": "我的 FastAPI 后端启动成功！"}
@@ -65,6 +122,7 @@ def get_tasks(
     page: int = 1,
     size: int = 2,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if page < 1:
         raise HTTPException(status_code=400, detail="页码必须大于 0")
@@ -73,7 +131,7 @@ def get_tasks(
         raise HTTPException(status_code=400, detail="每页数量必须在 1 到 100 之间")
 
         # 1. 收集筛选条件
-    conditions = []
+    conditions = [Task.user_id == current_user.id]
 
     if priority is not None:
         conditions.append(Task.priority == priority)
@@ -128,12 +186,17 @@ def get_tasks(
     }
 
 @app.post("/tasks", status_code=201)
-def create_task(task: TaskCreate, db: Session = Depends(get_db)):
+def create_task(
+    task: TaskCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     new_task = Task(
         name=task.name,
         done=task.done,
         priority=task.priority,
         due_date=task.due_date,
+        user_id=current_user.id,
     )
 
     try:
@@ -161,6 +224,7 @@ def update_task(
     task_id: int,
     task: TaskUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     update_data = task.model_dump(exclude_unset=True)
 
@@ -175,7 +239,12 @@ def update_task(
                 detail=f"{field} 不能为 null",
             )
 
-    db_task = db.get(Task, task_id)
+        db_task = db.scalar(
+        select(Task).where(
+            Task.id == task_id,
+            Task.user_id == current_user.id,
+        )
+    )
 
     if db_task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -203,9 +272,18 @@ def update_task(
 
 
 @app.delete("/tasks/{task_id}")
-def delete_task(task_id: int, db: Session = Depends(get_db)):
-    db_task = db.get(Task, task_id)
-
+def delete_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    db_task = db.scalar(
+        select(Task).where(
+            Task.id == task_id,
+            Task.user_id == current_user.id,
+        )
+    )
+        
     if db_task is None:
         raise HTTPException(status_code=404, detail="任务不存在")
 
@@ -220,3 +298,87 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
         ) from exc
 
     return {"message": "任务删除成功"}
+
+@app.post("/auth/register", status_code=201)
+def register_user(user: UserCreate, db: Session = Depends(get_db)):
+    # 检查用户名是否已存在
+    existing_user = db.scalar(
+        select(User).where(User.username == user.username)
+    )
+    if existing_user is not None:
+        raise HTTPException(status_code=409, detail="用户名已存在")
+
+    # 只保存密码哈希，不保存原密码
+    new_user = User(
+        username=user.username,
+        hashed_password=hash_password(user.password),
+    )
+
+    try:
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+    except IntegrityError as exc:
+        db.rollback()
+
+        # MySQL 1062：重复值，同时注册同名账号时也能拦住
+        if exc.orig.args[0] == 1062:
+            raise HTTPException(
+                status_code=409,
+                detail="用户名已存在",
+            ) from exc
+
+        raise HTTPException(
+            status_code=500,
+            detail="注册失败",
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="注册失败",
+        ) from exc
+
+    # 不返回原密码或密码哈希
+    return {
+        "id": new_user.id,
+        "username": new_user.username,
+    }
+
+@app.post("/auth/login")
+def login_user(user: UserLogin, db: Session = Depends(get_db)):
+    # 根据用户名查找用户
+    db_user = db.scalar(
+        select(User).where(User.username == user.username)
+    )
+
+    # 用户不存在，或者密码错误，都返回同一个提示
+    if db_user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="用户名或密码错误",
+        )
+
+    if not verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="用户名或密码错误",
+        )
+
+    # 只有校验通过，才签发登录凭证
+    access_token = create_access_token(db_user.id)
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
+
+@app.get("/auth/me")  # 查看当前登录用户，不返回密码或哈希
+def read_current_user(
+    current_user: User = Depends(get_current_user),
+):
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+    }
