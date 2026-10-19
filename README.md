@@ -11,6 +11,7 @@
 - MySQL
 - PyMySQL
 - python-dotenv
+- SQLAlchemy：数据库表映射、查询和事务操作
 
 ## 已实现功能
 
@@ -32,19 +33,32 @@ main.py             FastAPI 接口
 database.py         MySQL 连接代码
 test_mysql.py       测试数据库连接
 .env.example        数据库配置示例
+database_orm.py     SQLAlchemy 连接引擎和会话
+models.py           任务表 ORM 模型
+requirements.txt    Python 依赖清单
+```
 
+## 启动项目
 
-##启动项目
 先安装依赖：
-pip install fastapi uvicorn pymysql python-dotenv
+
+```powershell
+python -m pip install -r requirements.txt
+```
 
 复制配置文件：
+
+```powershell
 Copy-Item .env.example .env
+```
 
-然后打开 .env，填写自己的 MySQL 密码。
+然后打开 `.env`，填写自己的 MySQL 密码。
 
-##启动后端：
+## 启动后端
+
+```powershell
 uvicorn main:app --reload --port 8000
+```
 
 打开接口文档：
 http://127.0.0.1:8000/docs
@@ -52,3 +66,4 @@ http://127.0.0.1:8000/docs
 获取任务示例
 http://127.0.0.1:8000/tasks?priority=high&done=false&page=1&size=2
 这条请求的意思是：查询高优先级、未完成的任务，每页显示 2 条。
+
