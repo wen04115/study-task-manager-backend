@@ -1,5 +1,6 @@
 import os
 import unittest
+import jwt
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -10,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 from database_orm import engine as business_engine, get_db
 from main import app
 from models import Base, User
-from security import create_access_token
+from security import create_access_token, verify_password
 
 
 class IsolatedTaskTests(unittest.TestCase):
@@ -158,6 +159,104 @@ class IsolatedTaskTests(unittest.TestCase):
         response = self.client.get("/tasks", headers=self.headers_a)
         self.assertEqual(response.json()["total"], 1)
 
+    def register_auth_user(self):
+        credentials = {
+            "username": "auth_test",
+            "password": "AuthTestPassword123!",
+        }
+        response = self.client.post("/auth/register", json=credentials)
+        self.assertEqual(response.status_code, 201, response.text)
+        return credentials, response.json()
+
+    def test_register_login_and_me(self):
+        credentials, registered = self.register_auth_user()
+
+        # 注册响应不应泄露密码或哈希。
+        self.assertEqual(set(registered), {"id", "username"})
+
+        # 数据库保存的应该是可验证的哈希，而不是明文。
+        with Session(self.engine) as db:
+            user = db.get(User, registered["id"])
+            self.assertNotEqual(
+                user.hashed_password, credentials["password"]
+            )
+            self.assertTrue(
+                verify_password(
+                    credentials["password"], user.hashed_password
+                )
+            )
+
+        response = self.client.post("/auth/login", json=credentials)
+        self.assertEqual(response.status_code, 200, response.text)
+
+        login_data = response.json()
+        self.assertEqual(login_data["token_type"], "bearer")
+        self.assertTrue(login_data["access_token"])
+
+        response = self.client.get(
+            "/auth/me",
+            headers={
+                "Authorization": f"Bearer {login_data['access_token']}"
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), registered)
+
+    def test_duplicate_registration(self):
+        credentials, _ = self.register_auth_user()
+
+        response = self.client.post("/auth/register", json=credentials)
+        self.assertEqual(response.status_code, 409)
+
+    def test_wrong_password_and_unknown_user(self):
+        credentials, _ = self.register_auth_user()
+
+        wrong_password = self.client.post(
+            "/auth/login",
+            json={
+                "username": credentials["username"],
+                "password": "WrongPassword123!",
+            },
+        )
+        unknown_user = self.client.post(
+            "/auth/login",
+            json={
+                "username": "not_registered",
+                "password": "WrongPassword123!",
+            },
+        )
+
+        self.assertEqual(wrong_password.status_code, 401)
+        self.assertEqual(unknown_user.status_code, 401)
+        self.assertEqual(
+            wrong_password.json()["detail"],
+            unknown_user.json()["detail"],
+        )
+
+    def test_invalid_credentials(self):
+        expired_token = jwt.encode(
+            {"sub": "1", "exp": 0},
+            os.environ["JWT_SECRET_KEY"],
+            algorithm="HS256",
+        )
+
+        tokens = {
+            "malformed": "not-a-valid-token",
+            "expired": expired_token,
+            "missing_user": create_access_token(999999),
+        }
+
+        for case, token in tokens.items():
+            with self.subTest(case=case):
+                response = self.client.get(
+                    "/auth/me",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(
+                    response.headers.get("WWW-Authenticate"),
+                    "Bearer",
+                )
 
 if __name__ == "__main__":
     unittest.main()
