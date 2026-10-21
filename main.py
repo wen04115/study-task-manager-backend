@@ -1,11 +1,11 @@
 import os
 import jwt
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 
 from sqlalchemy import func, select
@@ -36,19 +36,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+TaskName = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=255,
+    ),
+]
+
 
 class TaskCreate(BaseModel):
-    name: str = Field(min_length=1, description="任务名称不能为空")
+    name: TaskName
     done: bool = False
     priority: Literal["low", "medium", "high"] = "medium"
     due_date: date | None = None
 
 
 class TaskUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1)
+    name: TaskName | None = None
     done: bool | None = None
     priority: Literal["low", "medium", "high"] | None = None
     due_date: date | None = None
+
 
 class UserCreate(BaseModel):
     username: str = Field(
@@ -57,6 +67,8 @@ class UserCreate(BaseModel):
         pattern=r"^[a-zA-Z0-9_]+$",
     )
     password: str = Field(min_length=8, max_length=128)
+
+
 
 class UserLogin(BaseModel):
     username: str = Field(min_length=1, max_length=50)
@@ -116,7 +128,7 @@ def health_check():
 def get_tasks(
     priority: Literal["low", "medium", "high"] | None = None,
     done: bool | None = None,
-    due_date: str | None = None,
+    due_date: date | None = None,
     sort_by: Literal["id", "due_date", "priority"] = "id",
     sort_order: Literal["asc", "desc"] = "desc",
     page: int = 1,
@@ -161,7 +173,7 @@ def get_tasks(
     statement = (
         select(Task)
         .where(*conditions)
-        .order_by(sort_column)
+        .order_by(sort_column, Task.id.asc())
         .offset((page - 1) * size)
         .limit(size)
     )
@@ -231,7 +243,7 @@ def update_task(
     if not update_data:
         raise HTTPException(status_code=400, detail="没有要修改的内容")
 
-    # 这些字段不允许改成空值，截止日期可以清空
+        # 这些字段不允许改成空值，截止日期可以清空
     for field in ("name", "done", "priority"):
         if field in update_data and update_data[field] is None:
             raise HTTPException(
@@ -239,7 +251,7 @@ def update_task(
                 detail=f"{field} 不能为 null",
             )
 
-        db_task = db.scalar(
+    db_task = db.scalar(
         select(Task).where(
             Task.id == task_id,
             Task.user_id == current_user.id,
