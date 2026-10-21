@@ -8,12 +8,15 @@
 
 ## 技术栈
 
-- Python
-- FastAPI
-- MySQL
-- PyMySQL
-- python-dotenv
-- SQLAlchemy：数据库表映射、查询和事务操作
+- Python 3.12、FastAPI、Pydantic
+- MySQL、SQLAlchemy、PyMySQL
+- PyJWT：JWT 登录认证
+- pwdlib / Argon2：密码哈希
+- python-dotenv：加载环境配置
+- unittest、FastAPI TestClient、HTTPX：自动化测试
+- SQLite 内存数据库：隔离测试
+- GitHub Actions：持续集成
+- Docker：后端镜像构建与容器化运行
 
 ## 核心功能
 
@@ -51,7 +54,9 @@ python -m pip install -r requirements.txt
 复制配置文件：
 
 ```powershell
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) {
+    Copy-Item .env.example .env
+}
 ```
 
 然后打开 `.env`，填写 MySQL 配置和 `JWT_SECRET_KEY`。
@@ -102,94 +107,146 @@ http://127.0.0.1:8000/tasks?priority=high&done=false&page=1&size=2
 - 凭证过期或无效时返回 401
 - 修改或删除不属于当前用户的任务时返回 404
 
-## 接口测试
+## 自动化测试
 
-先启动后端，并通过注册接口准备两个不同的测试账号。
-
-在运行测试的 PowerShell 中设置账号信息，下面的占位文字需要替换：
+推荐使用 Python 3.12。在项目根目录安装业务依赖和测试客户端依赖：
 
 ```powershell
-$env:TEST_USERNAME = "测试账号A"
-$env:TEST_PASSWORD = "账号A的密码"
-$env:TEST_OTHER_USERNAME = "测试账号B"
-$env:TEST_OTHER_PASSWORD = "账号B的密码"
-
-python -m unittest discover -s tests -v
+python -m pip install -r requirements.txt
+python -m pip install httpx==0.28.1
 ```
 
-当前共 8 个测试方法，覆盖任务增删改查、分页校验、条件筛选、空名称校验、未登录访问和跨用户隔离。
+运行隔离测试：
 
-测试会创建专用任务，并登记清理操作。请在本地开发环境运行，不要连接生产数据库。
+```powershell
+python -B -m unittest discover -s tests -p "test_tasks_isolated.py" -v
+```
 
-## 数据备份与迁移
+当前包含 10 项测试，覆盖：
 
-- `backup_tasks.py`：将任务数据导出到本机 `outputs` 文件夹
-- `create_users_table.py`：创建用户表，不初始化任务表
-- `migrate_task_owner.py`：本项目旧数据的一次性迁移脚本，要求用户 1 为 demo_user
+- 未登录访问拦截
+- 任务名称校验及首尾空格处理
+- 非法日期校验
+- 任务创建、修改、删除
+- 分页查询
+- 跨用户访问隔离
+- 注册、密码哈希、登录及当前用户查询
+- 重复注册拦截
+- 错误密码和不存在的用户
+- 非法、过期及对应用户不存在的登录凭证
 
-迁移脚本不是通用的首次建库脚本，不要在其他数据库上直接执行。
-真实 `.env` 和 `outputs` 备份不提交到仓库。
+隔离测试使用 SQLite 内存数据库和临时测试用户，不需要启动后端服务，
+不使用真实账号，并阻止连接业务 MySQL。
 
-## Docker 本地运行
+这些测试不替代真实 MySQL 兼容性测试。
+
+### 可选：真实服务集成测试
+
+原来的 tests/test_tasks.py 请求本地正在运行的后端，
+需要通过 TEST_USERNAME、TEST_PASSWORD、
+TEST_OTHER_USERNAME、TEST_OTHER_PASSWORD 配置两个专用测试账号。
+
+只运行该文件：
+
+```powershell
+python -m unittest discover -s tests -p "test_tasks.py" -v
+```
+
+这组测试会向服务对应的数据库写入测试任务并尝试清理。
+只能连接专用开发或测试数据库，不得连接生产数据库。
+
+不要使用不带文件筛选条件的 discover 命令，
+避免意外同时运行真实服务测试。
+
+## 持续集成 CI
+
+工作流文件：.github/workflows/ci.yml。
+
+推送到 main、向 main 发起 Pull Request 或手动触发时，执行：
+
+1. 安装 Python 依赖及测试客户端。
+2. 检查依赖兼容性。
+3. 运行隔离测试。
+
+CI 不依赖本机 MySQL，也不需要配置真实账号或数据库密码。
+结果可在本仓库的 Actions 页面查看。
+
+CI 通过只代表上述检查通过，不代表完成了生产部署或所有场景验收。
+
+
+## Docker Compose 本地部署
 
 适用于 Windows Docker Desktop。
 
-本方案只容器化 FastAPI 后端：
-- MySQL 继续运行在宿主机上
-- 前端仍通过 Vite 启动
-- 任务数据保存在宿主机 MySQL，不保存在后端容器里
+- 前端由 Nginx 提供静态页面。
+- 后端由 Uvicorn 运行 FastAPI。
+- Compose 编排前后端服务。
+- 后端连接宿主机现有 MySQL，不创建或迁移数据库。
+- 真实 .env 不写入镜像、不提交到 Git。
 
-### 构建镜像
+### 准备条件
 
-在项目根目录执行：
+1. Docker Desktop 和宿主机 MySQL 已启动。
+2. 后端 .env 已配置数据库账号、端口、数据库名和 JWT_SECRET_KEY。
+3. 数据库表结构已准备好。
+4. 前后端仓库均已下载，并包含各自的 Dockerfile。
 
-```powershell
-docker build -t study-task-backend .
-```
+### 首次构建与启动
 
-真实 `.env` 不复制到镜像，启动时通过 `--env-file` 提供配置。
-
-### 新数据库首次建表
-
-如果目标数据库已经存在但尚未建表，可以执行：
+在后端项目根目录执行，将前端路径替换为实际位置：
 
 ```powershell
-docker run --rm --env-file .env -e MYSQL_HOST=host.docker.internal study-task-backend python init_tables.py
+$env:FRONTEND_CONTEXT = 'D:/codex_create/ai-study-react'
+
+docker compose config --quiet
+docker compose build
+docker compose up -d --no-build
+docker compose ps
 ```
 
-已有且完成迁移的开发数据库不需要再次初始化。
+FRONTEND_CONTEXT 仅在当前终端有效，新开终端后需要重新设置。
 
-### 首次创建并启动容器
+访问页面：http://127.0.0.1:8080
 
-先停止占用 8000 端口的本地 Uvicorn，再执行：
+健康检查：http://127.0.0.1:8080/api/health
+
+后端不发布宿主机端口；Nginx 在容器网络内转发 /api 请求。
+容器中的 MYSQL_HOST 覆盖为 host.docker.internal，本机 .env 无须修改。
+
+### 日常启动与停止
+
+在后端项目根目录设置 FRONTEND_CONTEXT 后执行：
+
+启动：
 
 ```powershell
-docker run --name study-task-api -p 127.0.0.1:8000:8000 --env-file .env -e MYSQL_HOST=host.docker.internal study-task-backend
+docker compose up -d --no-build
 ```
 
-容器通过 `host.docker.internal` 连接宿主机 MySQL，不需要修改本机 `.env` 原来的 MYSQL_HOST。
-
-健康检查：http://127.0.0.1:8000/health
-
-接口文档：http://127.0.0.1:8000/docs
-
-### 停止与再次启动
-
-在另一个终端停止容器：
+停止时再单独执行：
 
 ```powershell
-docker stop study-task-api
+docker compose stop
 ```
 
-下次启动已有容器：
+### 修改代码后重新部署
 
 ```powershell
-docker start -a study-task-api
+docker compose build
+docker compose up -d --no-build
 ```
 
-不要重复执行首次创建命令，否则会产生容器名冲突。
+仅重启容器不会更新镜像中的代码。
 
-本地 Uvicorn 和容器后端不能同时占用宿主机的 8000 端口。
+### 数据与验收范围
 
-修改代码后需要重新构建镜像并重建容器；只执行 start 不会更新代码。
-修改 `.env` 后，也需要重建容器才能应用新的环境变量。
+任务保存在外部 MySQL，不保存在前后端容器中。
+容器重建不会自动删除外部 MySQL 数据，但仍应独立做好数据库备份。
+
+已完成本地页面登录、任务读写、刷新登录恢复，
+以及容器重建后任务和修改保留的手动验收。
+
+/health 只检查应用响应，不检查 MySQL。
+登录和任务操作成功才构成数据库连通性的验证。
+
+本地验收不等于公网生产部署验收。
